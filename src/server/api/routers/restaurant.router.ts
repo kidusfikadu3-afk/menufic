@@ -5,7 +5,7 @@ import type { Image, Prisma, PrismaPromise, Restaurant } from "@prisma/client";
 
 import { env } from "src/env/server.mjs";
 import { createTRPCRouter, protectedProcedure, publicProcedure } from "src/server/api/trpc";
-import { encodeImageToBlurhash, getColor, imageKit, rgba2hex, uploadImage } from "src/server/imageUtil";
+import { encodeImageToBlurhash, getColor, getImageKit, rgba2hex, uploadImage } from "src/server/imageUtil";
 import { bannerInput, id, restaurantId, restaurantInput } from "src/utils/validators";
 
 export const restaurantRouter = createTRPCRouter({
@@ -17,7 +17,7 @@ export const restaurantRouter = createTRPCRouter({
         });
 
         // Check if the maximum banner count of the restaurant has been reached
-        if (restaurant?.banners.length >= Number(env.NEXT_PUBLIC_MAX_BANNERS_PER_RESTAURANT)) {
+        if (restaurant?.banners.length >= Number(process.env.MAX_BANNERS_PER_RESTAURANT || 5)) {
             throw new TRPCError({
                 code: "BAD_REQUEST",
                 message: "Maximum number of banners reached",
@@ -43,14 +43,30 @@ export const restaurantRouter = createTRPCRouter({
 
     /** Create a new restaurant for the user */
     create: protectedProcedure.input(restaurantInput).mutation(async ({ ctx, input }) => {
-        const count = await ctx.prisma.restaurant.count({ where: { userId: ctx.session.user.id } });
-
-        // Check if user has reached the maximum number of restaurants that he/she can create
-        if (count >= Number(env.NEXT_PUBLIC_MAX_RESTAURANTS_PER_USER)) {
-            throw new TRPCError({
-                code: "BAD_REQUEST",
-                message: "Maximum number of restaurants reached",
+        // ✅ ROLE-BASED RATE LIMITING: Super Admin = 100, Restaurant Admin = 1
+        if (ctx.session.user.role === "RESTAURANT_ADMIN") {
+            const restaurantCount = await ctx.prisma.restaurant.count({ 
+                where: { userId: ctx.session.user.id } 
             });
+            
+            if (restaurantCount >= 1) {
+                throw new TRPCError({
+                    code: "BAD_REQUEST",
+                    message: "Restaurant limit reached. Maximum 1 restaurant per admin."
+                });
+            }
+        } else {
+            // Super Admin and other roles have higher limit (100)
+            const count = await ctx.prisma.restaurant.count({ 
+                where: { userId: ctx.session.user.id } 
+            });
+
+            if (count >= Number(process.env.MAX_RESTAURANTS_PER_USER || 100)) {
+                throw new TRPCError({
+                    code: "BAD_REQUEST",
+                    message: "Maximum number of restaurants reached (100 limit for super admins)",
+                });
+            }
         }
 
         const [uploadedResponse, blurHash, color] = await Promise.all([
@@ -59,23 +75,30 @@ export const restaurantRouter = createTRPCRouter({
             getColor(input.imageBase64),
         ]);
 
-        return ctx.prisma.restaurant.create({
-            data: {
-                contactNo: input.contactNo,
-                image: {
-                    create: {
-                        blurHash,
-                        color: rgba2hex(color[0], color[1], color[2]),
-                        id: uploadedResponse.fileId,
-                        path: uploadedResponse.filePath,
-                    },
+        // ✅ USE TRANSACTION FOR ATOMIC OPERATIONS
+        return ctx.prisma.$transaction(async (tx) => {
+            // First create the image
+            const image = await tx.image.create({
+                data: {
+                    blurHash,
+                    color: rgba2hex(color[0], color[1], color[2]),
+                    id: uploadedResponse.fileId,
+                    path: uploadedResponse.filePath,
                 },
-                isPublished: false,
-                location: input.location,
-                name: input.name,
-                userId: ctx.session.user.id,
-            },
-            include: { image: true },
+            });
+
+            // Then create the restaurant with imageId
+            return tx.restaurant.create({
+                data: {
+                    contactNo: input.contactNo,
+                    imageId: image.id,
+                    isPublished: false,
+                    location: input.location,
+                    name: input.name,
+                    userId: ctx.session.user.id,
+                },
+                include: { image: true },
+            });
         });
     }),
 
@@ -117,7 +140,8 @@ export const restaurantRouter = createTRPCRouter({
         transactions.push(
             ctx.prisma.restaurant.delete({ where: { id_userId: { id: input.id, userId: ctx.session.user.id } } })
         );
-
+        
+        const imageKit = getImageKit();
         await Promise.all([imageKit.bulkDeleteFiles(imagePaths), ctx.prisma.$transaction(transactions)]);
 
         return currentItem;
@@ -129,7 +153,9 @@ export const restaurantRouter = createTRPCRouter({
             include: { banners: true },
             where: { id_userId: { id: input.restaurantId, userId: ctx.session.user.id } },
         });
+        
         if (restaurant.banners.find((item) => item.id === input.id)) {
+            const imageKit = getImageKit();
             const [, deletedImage] = await Promise.all([
                 imageKit.deleteFile(input.id),
                 ctx.prisma.image.delete({ where: { id: input.id } }),
@@ -148,12 +174,18 @@ export const restaurantRouter = createTRPCRouter({
 
     /** Get all the restaurants belonging to a user */
     getAll: protectedProcedure.query(({ ctx }) =>
-        ctx.prisma.restaurant.findMany({ include: { image: true }, where: { userId: ctx.session.user.id } })
+        ctx.prisma.restaurant.findMany({ 
+            include: { image: true }, 
+            where: { userId: ctx.session.user.id } 
+        })
     ),
 
     /** Get all the restaurants that have been published by all users */
     getAllPublished: protectedProcedure.query(({ ctx }) =>
-        ctx.prisma.restaurant.findMany({ include: { image: true }, where: { isPublished: true } })
+        ctx.prisma.restaurant.findMany({ 
+            include: { image: true }, 
+            where: { isPublished: true } 
+        })
     ),
 
     /** Get banner images belonging to a restaurant */
@@ -211,6 +243,7 @@ export const restaurantRouter = createTRPCRouter({
         const transactions: (Prisma.Prisma__ImageClient<Image> | Prisma.Prisma__RestaurantClient<Restaurant>)[] = [];
 
         if (input.imageBase64 && currentItem.imageId) {
+            const imageKit = getImageKit();
             const [uploadedResponse, blurHash, color] = await Promise.all([
                 uploadImage(input.imageBase64, `user/${ctx.session.user.id}/restaurant`),
                 encodeImageToBlurhash(input.imageBase64),

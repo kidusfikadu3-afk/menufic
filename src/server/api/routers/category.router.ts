@@ -5,7 +5,7 @@ import type { PrismaPromise } from "@prisma/client";
 
 import { env } from "src/env/server.mjs";
 import { createTRPCRouter, protectedProcedure } from "src/server/api/trpc";
-import { imageKit } from "src/server/imageUtil";
+import { getImageKit } from "src/server/imageUtil";
 import { categoryInput, id, menuId } from "src/utils/validators";
 
 export const categoryRouter = createTRPCRouter({
@@ -20,7 +20,7 @@ export const categoryRouter = createTRPCRouter({
         ]);
 
         /** Check if the maximum number of categories per menu has been reached */
-        if (count >= Number(env.NEXT_PUBLIC_MAX_CATEGORIES_PER_MENU)) {
+        if (count >= Number(process.env.NEXT_PUBLIC_MAX_CATEGORIES_PER_MENU)) {
             throw new TRPCError({
                 code: "BAD_REQUEST",
                 message: "Reached maximum number of categories per menu",
@@ -61,6 +61,7 @@ export const categoryRouter = createTRPCRouter({
         );
 
         if (imagePaths.length > 0) {
+            const imageKit = getImageKit(); // ✅ ADD THIS LINE
             promiseList.push(imageKit.bulkDeleteFiles(imagePaths));
             transactions.push(ctx.prisma.image.deleteMany({ where: { id: { in: imagePaths } } }));
         }

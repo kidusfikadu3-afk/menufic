@@ -2,19 +2,42 @@ import NextAuth, { type NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
 import GitHubProvider from "next-auth/providers/github";
 import GoogleProvider from "next-auth/providers/google";
-
+import { prisma } from "src/server/db";
 import { env } from "src/env/server.mjs";
 
 export const authOptions: NextAuthOptions = {
-    // Include user.id on session
     callbacks: {
-        session({ session, token }) {
+        async session({ session, token }) {
             if (session.user && token.sub) {
-                // eslint-disable-next-line no-param-reassign
                 session.user.id = token.sub;
+                session.user.role = token.role;
             }
             return session;
         },
+        
+        async jwt({ token, user }) {
+            if (user) {
+                // Find user by email instead of ID to avoid mismatch
+                const dbUser = await prisma.user.findUnique({
+                    where: { email: user.email },
+                    select: { role: true }
+                });
+                token.role = dbUser?.role;
+                
+                // First user becomes SUPER_ADMIN automatically
+                if (!dbUser?.role && user.email) {
+                    const userCount = await prisma.user.count();
+                    if (userCount === 1) { // This is the first user
+                        await prisma.user.update({
+                            where: { email: user.email },
+                            data: { role: "SUPER_ADMIN" }
+                        });
+                        token.role = "SUPER_ADMIN";
+                    }
+                }
+            }
+            return token;
+        }
     },
     pages: { signIn: "/auth/signin" },
     providers: [
@@ -31,22 +54,16 @@ export const authOptions: NextAuthOptions = {
                 if (env.TEST_MENUFIC_USER_LOGIN_KEY && credentials?.loginKey === env.TEST_MENUFIC_USER_LOGIN_KEY) {
                     return { email: "testUser@gmail.com", id: "testUser", image: "", name: "Test User" };
                 }
-                // If you return null then an error will be displayed advising the user to check their details.
                 return null;
-                // You can also Reject this callback with an Error thus the user will be sent to the error page with the error message as a query parameter
             },
             credentials: { loginKey: { label: "Login Key", type: "password" } },
             type: "credentials",
         }),
     ],
     session: {
-        // Seconds - How long until an idle session expires and is no longer valid.
-        maxAge: 30 * 24 * 60 * 60, // 30 days
+        maxAge: 30 * 24 * 60 * 60,
         strategy: "jwt",
-        // Seconds - Throttle how frequently to write to database to extend a session.
-        // Use it to limit write operations. Set to 0 to always update the database.
-        // Note: This option is ignored if using JSON Web Tokens
-        updateAge: 24 * 60 * 60, // 24 hours
+        updateAge: 24 * 60 * 60,
     },
 };
 

@@ -5,13 +5,18 @@ import ImageKit from "imagekit";
 import { nanoid } from "nanoid";
 import sharp from "sharp";
 
-import { env } from "src/env/server.mjs";
-
-export const imageKit = new ImageKit({
-    privateKey: env.IMAGEKIT_PRIVATE_KEY,
-    publicKey: env.IMAGEKIT_PUBLIC_KEY,
-    urlEndpoint: env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT,
-});
+// Replace direct initialization with a function
+export const getImageKit = () => {
+    if (!process.env.IMAGEKIT_PRIVATE_KEY) {
+        throw new Error("IMAGEKIT_PRIVATE_KEY is not defined");
+    }
+    
+    return new ImageKit({
+        privateKey: process.env.IMAGEKIT_PRIVATE_KEY,
+        publicKey: process.env.NEXT_PUBLIC_IMAGEKIT_PUBLIC_KEY!,
+        urlEndpoint: process.env.NEXT_PUBLIC_IMAGEKIT_URL_ENDPOINT!,
+    });
+};
 
 const fac = new FastAverageColor();
 
@@ -28,6 +33,7 @@ export const getImageUriFromBase64 = (imageBase64: string) => {
 /** Upload image to imageKit after converting it to an avif file */
 export const uploadImage = async (imageBase64: string, imageFolder: string) => {
     const uri = getImageUriFromBase64(imageBase64);
+    const imageKit = getImageKit(); // Initialize here
 
     const avifImageBuffer = await sharp(Buffer.from(uri, "base64"))
         .toFormat("avif", { quality: 100 })
@@ -37,7 +43,7 @@ export const uploadImage = async (imageBase64: string, imageFolder: string) => {
     return imageKit.upload({
         file: avifImageBuffer,
         fileName: nanoid(24),
-        folder: `/${env.IMAGEKIT_BASE_FOLDER}/${imageFolder}/`,
+        folder: `/${process.env.IMAGEKIT_BASE_FOLDER}/${imageFolder}/`,
     });
 };
 

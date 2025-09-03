@@ -5,7 +5,7 @@ import type { Image, MenuItem, Prisma } from "@prisma/client";
 
 import { env } from "src/env/server.mjs";
 import { createTRPCRouter, protectedProcedure } from "src/server/api/trpc";
-import { encodeImageToBlurhash, getColor, imageKit, rgba2hex, uploadImage } from "src/server/imageUtil";
+import { encodeImageToBlurhash, getColor, getImageKit, rgba2hex, uploadImage } from "src/server/imageUtil";
 import { categoryId, id, menuId, menuItemInput } from "src/utils/validators";
 
 export const menuItemRouter = createTRPCRouter({
@@ -20,7 +20,7 @@ export const menuItemRouter = createTRPCRouter({
         ]);
 
         /** Check if the maximum number of items per category has been reached */
-        if (count >= Number(env.NEXT_PUBLIC_MAX_MENU_ITEMS_PER_CATEGORY)) {
+        if (count >= Number(process.env.NEXT_PUBLIC_MAX_MENU_ITEMS_PER_CATEGORY)) {
             throw new TRPCError({
                 code: "BAD_REQUEST",
                 message: "Reached maximum number of menu items per category",
@@ -69,6 +69,7 @@ export const menuItemRouter = createTRPCRouter({
         const promiseList = [];
 
         if (currentItem.imageId) {
+            const imageKit = getImageKit();
             promiseList.push(imageKit.deleteFile(currentItem.imageId));
             transactions.push(ctx.prisma.image.delete({ where: { id: currentItem.imageId } }));
         }
@@ -90,6 +91,7 @@ export const menuItemRouter = createTRPCRouter({
 
         /** Delete the previous image from imageKit and db, if the image is being replaced */
         if (currentItem.imageId && (!input.imagePath || input.imageBase64)) {
+            const imageKit = getImageKit(); // ✅ ADD THIS LINE
             promiseList.push(imageKit.deleteFile(currentItem.imageId));
             transactions.push(ctx.prisma.image.delete({ where: { id: currentItem.imageId } }));
         }

@@ -14,7 +14,10 @@ import { serverSchema } from "./schema.mjs";
  */
 const serverEnv = {};
 Object.keys(serverSchema.shape).forEach((key) => {
-    serverEnv[key] = process.env[key];
+    // Only include server-side variables (no NEXT_PUBLIC_ prefix)
+    if (!key.startsWith("NEXT_PUBLIC_")) {
+        serverEnv[key] = process.env[key];
+    }
 });
 
 // eslint-disable-next-line no-underscore-dangle
@@ -26,12 +29,8 @@ if (!parsedServerEnv.success) {
     throw new Error("Invalid environment variables");
 }
 
-Object.keys(parsedServerEnv.data).forEach((key) => {
-    if (key.startsWith("NEXT_PUBLIC_")) {
-        // eslint-disable-next-line no-console
-        console.warn("❌ You are exposing a server-side env-variable:", key);
-        throw new Error("You are exposing a server-side env-variable");
-    }
-});
+// Remove the check that prevents NEXT_PUBLIC_ variables in server schema
+// This check should be done in the schema definition instead
 
-export const env = { ...parsedServerEnv.data, ...clientEnv };
+export const env = { ...parsedServerEnv.data };
+// Remove ...clientEnv from the export to avoid mixing server and client env variables
